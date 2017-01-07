@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+
+/**
+ * Sends keys to a Roku at a given IP address
+ *
+ * Useful for sending long strings of characters since it sends keypresses at a
+ * reasonable interval. The Roku mobile app remote sends all the keys at once
+ * when pasting a long string into the text input and tends to drop characters.
+ */
+
+const {exec} = require('child_process')
+const {basename} = require('path')
+const [script, ipAddr, keys] = process.argv.slice(1)
+
+function intervalKeypress(keys, delay) {
+  if (!keys.length) {
+    return
+  }
+
+  exec(`curl -X POST ${ipAddr}:8060/keypress/Lit_${encodeURIComponent(keys[0])}`, (error, stdout, stderr) => {
+    if (error) {
+      console.error(error)
+      return
+    }
+
+    setTimeout(intervalKeypress, delay, keys.slice(1), delay)
+  })
+}
+
+if (ipAddr && keys) {
+  intervalKeypress(keys, 100)
+} else {
+  console.error(`Please provide an IP address and keys: ${basename(script)} <ip addr> <keys>`)
+}
