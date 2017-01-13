@@ -25,5 +25,5 @@ uninstall:
 	@echo "Unlinking '$(SCRIPTS)' from $(PREFIX)"
 	@echo ""
 	for script in $(SCRIPTS); do \
-		find $(PREFIX) -name $$script -type l -exec rm {} +; \
+		find $(PREFIX) -maxdepth 1 -name $$script -type l -exec rm {} +; \
 		done
