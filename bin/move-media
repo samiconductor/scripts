@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
+import sys
 import re
 import hashlib
 import exifread
@@ -23,7 +25,7 @@ shasum_mismatch_count = 0
 
 def ensure_path_exists(path):
     if not path.exists():
-        print('The path {} does not exist!'.format(path))
+        print('The path {} does not exist!'.format(path), file=sys.stderr)
         exit(1)
 
 def get_date(path, is_image=False):
@@ -36,8 +38,7 @@ def get_date(path, is_image=False):
                 image_date = tags['EXIF DateTimeOriginal']
                 split_date = [int(x) for x in re.sub(r'[^0-9]', ' ', str(image_date)).split(' ')]
 
-                if verbose:
-                    print('Using image {} EXIF date {}'.format(path, image_date))
+                logging.info('Using image {} EXIF date {}'.format(path, image_date))
 
                 return datetime(*split_date)
 
@@ -50,19 +51,16 @@ def get_date(path, is_image=False):
         try:
             file_name_date = datetime(*split_date)
 
-            if verbose:
-                print('Using date format of file {} with date {}'.format(path, file_name_date))
+            logging.info('Using date format of file {} with date {}'.format(path, file_name_date))
 
             return file_name_date
         except ValueError:
-            if verbose:
-                print('Matched date format of file {} is not a valid date'.format(path))
+            logging.info('Matched date format of file {} is not a valid date'.format(path))
 
     # modify time
     modify_date = datetime.fromtimestamp(path.stat().st_mtime)
 
-    if verbose:
-        print('Using file {} modify date {}'.format(path, modify_date))
+    logging.info('Using file {} modify date {}'.format(path, modify_date))
 
     return modify_date
 
@@ -90,8 +88,7 @@ def remove_old_path(path):
     time_since_path_modified = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
 
     if time_since_path_modified.days > keep_old_path_days:
-        if verbose:
-            print('Remove path {} that is older than {} days: last modified {} days ago'.format(path, keep_old_path_days, time_since_path_modified.days))
+        logging.info('Remove path {} that is older than {} days: last modified {} days ago'.format(path, keep_old_path_days, time_since_path_modified.days))
         path.unlink()
         return True
 
@@ -100,20 +97,22 @@ args = parser.parse_args()
 source_path = Path(args.source)
 dest_photos_path = Path(args.photos)
 dest_videos_path = Path(args.videos)
-verbose = args.verbose
 keep_old_path_days = args.remove
+verbose = args.verbose
+
+logging_level = logging.INFO if args.verbose else logging.ERROR
+logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', level=logging_level, stream=sys.stdout)
 
 ensure_path_exists(source_path)
 ensure_path_exists(dest_photos_path)
 ensure_path_exists(dest_videos_path)
 
-if verbose:
-    print('\n--- Move Media ---')
-    print('Source: {}'.format(source_path))
-    print('Photos Destination: {}'.format(dest_photos_path))
-    print('Videos Destination: {}'.format(dest_videos_path))
-    if keep_old_path_days is not None:
-        print('Removing copied files older than {} days'.format(keep_old_path_days))
+logging.info('--- Move Media ---')
+logging.info('Source: {}'.format(source_path))
+logging.info('Photos Destination: {}'.format(dest_photos_path))
+logging.info('Videos Destination: {}'.format(dest_videos_path))
+if keep_old_path_days is not None:
+    logging.info('Removing copied files older than {} days'.format(keep_old_path_days))
 
 for path in source_path.glob('**/*'):
     if not path.is_file():
@@ -125,8 +124,7 @@ for path in source_path.glob('**/*'):
     media_mime = image_mime or video_mime
 
     if not media_mime:
-        if verbose:
-            print('Skipping non-media file {}'.format(path))
+        logging.info('Skipping non-media file {}'.format(path))
         continue
 
     file_date = get_date(path, is_image=image_mime)
@@ -138,8 +136,7 @@ for path in source_path.glob('**/*'):
         source_shasum = shasum_path(path)
 
         if source_shasum == shasum_path(file_date_path):
-            if verbose:
-                print('Media file {} already copied to {}'.format(path, file_date_path))
+            logging.info('Media file {} already copied to {}'.format(path, file_date_path))
             already_copied_count += 1
             if remove_old_path(path):
                 removed_count += 1
@@ -148,8 +145,7 @@ for path in source_path.glob('**/*'):
         file_date_path = find_unique_path(file_date_path, source_shasum)
 
         if not file_date_path:
-            if verbose:
-                print('Media file {} already copied to {}'.format(path, file_date_path))
+            logging.info('Media file {} already copied to {}'.format(path, file_date_path))
             already_copied_count += 1
             if remove_old_path(path):
                 removed_count += 1
@@ -159,22 +155,19 @@ for path in source_path.glob('**/*'):
     file_date_path.write_bytes(path.read_bytes())
     copied_count += 1
 
-    if verbose:
-        print('Media file {} copied to {}'.format(path, file_date_path))
+    logging.info('Media file {} copied to {}'.format(path, file_date_path))
 
     if shasum_path(path) == shasum_path(file_date_path):
         if remove_old_path(path):
             removed_count += 1
-    elif verbose:
-        if verbose:
-            print('Shasum of copied file {} and destination file {} do not match!'.format(path, file_date_path))
+    else:
+        logging.warning('Shasum of copied file {} and destination file {} do not match!'.format(path, file_date_path))
         shasum_mismatch_count += 1
 
-if verbose:
-    print('\n---Move Media Complete---')
-    print('Copied {} files'.format(copied_count))
-    print('Skipped {} files that were already copied'.format(already_copied_count))
-    if shasum_mismatch_count > 0:
-        print('There were {} copied shasum mismatches'.format(shasum_mismatch_count))
-    if keep_old_path_days is not None:
-        print('Removed {} files older than {} days'.format(removed_count, keep_old_path_days))
+logging.info('---Move Media Complete---')
+logging.info('Copied {} files'.format(copied_count))
+logging.info('Skipped {} files that were already copied'.format(already_copied_count))
+if shasum_mismatch_count > 0:
+    logging.info('There were {} copied shasum mismatches'.format(shasum_mismatch_count))
+if keep_old_path_days is not None:
+    logging.info('Removed {} files older than {} days'.format(removed_count, keep_old_path_days))
