@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+
+import argparse
+import re
+import hashlib
+import exifread
+import magic
+
+from pathlib import Path
+from datetime import datetime
+
+parser = argparse.ArgumentParser(description='Move and rename photos')
+parser.add_argument('source', help='Source folder to read media from')
+parser.add_argument('--photos', required=True, help='Destination folder to move photos to')
+parser.add_argument('--videos', required=True, help='Destination folder to move videos to')
+parser.add_argument('--remove', type=int, help='Remove files older than provided days')
+parser.add_argument('--verbose', action='store_true', help='Print verbose output')
+
+copied_count = 0
+already_copied_count = 0
+removed_count = 0
+shasum_mismatch_count = 0
+
+def ensure_path_exists(path):
+    if not path.exists():
+        print('The path {} does not exist!'.format(path))
+        exit(1)
+
+def get_date(path, is_image=False):
+    # image EXIF date
+    if is_image:
+        with path.open('rb') as image:
+            tags = exifread.process_file(image)
+
+            if 'EXIF DateTimeOriginal' in tags:
+                image_date = tags['EXIF DateTimeOriginal']
+                split_date = [int(x) for x in re.sub(r'[^0-9]', ' ', str(image_date)).split(' ')]
+
+                if verbose:
+                    print('Using image {} EXIF date {}'.format(path, image_date))
+
+                return datetime(*split_date)
+
+    # file name with YYYYMMDD HHMMSS or YYYY-MM-DD HH:MM:SS date
+    file_name_date_match = re.search(r'(\d{4}).?(\d{2}).?(\d{2}).?(\d{2}).?(\d{2}).?(\d{2})', path.stem)
+
+    if file_name_date_match:
+        split_date = [int(x) for x in file_name_date_match.groups()]
+
+        try:
+            file_name_date = datetime(*split_date)
+
+            if verbose:
+                print('Using date format of file {} with date {}'.format(path, file_name_date))
+
+            return file_name_date
+        except ValueError:
+            if verbose:
+                print('Matched date format of file {} is not a valid date'.format(path))
+
+    # modify time
+    modify_date = datetime.fromtimestamp(path.stat().st_mtime)
+
+    if verbose:
+        print('Using file {} modify date {}'.format(path, modify_date))
+
+    return modify_date
+
+def shasum_path(path):
+    sha = hashlib.sha256()
+    sha.update(path.read_bytes())
+
+    return sha.digest()
+
+def find_unique_path(path, shasum, count=1):
+    incremented_path = path.with_name('{}_{}{}'.format(path.stem, count, path.suffix))
+
+    if incremented_path.exists():
+        if shasum == shasum_path(incremented_path):
+            return None
+
+        return find_unique_path(path, shasum, count + 1)
+
+    return incremented_path
+
+def remove_old_path(path):
+    if keep_old_path_days is None:
+        return
+
+    time_since_path_modified = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
+
+    if time_since_path_modified.days > keep_old_path_days:
+        if verbose:
+            print('Remove path {} that is older than {} days: last modified {} days ago'.format(path, keep_old_path_days, time_since_path_modified.days))
+        path.unlink()
+        return True
+
+args = parser.parse_args()
+
+source_path = Path(args.source)
+dest_photos_path = Path(args.photos)
+dest_videos_path = Path(args.videos)
+verbose = args.verbose
+keep_old_path_days = args.remove
+
+ensure_path_exists(source_path)
+ensure_path_exists(dest_photos_path)
+ensure_path_exists(dest_videos_path)
+
+if verbose:
+    print('\n--- Move Media ---')
+    print('Source: {}'.format(source_path))
+    print('Photos Destination: {}'.format(dest_photos_path))
+    print('Videos Destination: {}'.format(dest_videos_path))
+
+for path in source_path.glob('**/*'):
+    if not path.is_file():
+        continue
+
+    mime = magic.from_file(str(path), mime=True)
+    image_mime = mime.startswith('image')
+    video_mime = mime.startswith('video')
+    media_mime = image_mime or video_mime
+
+    if not media_mime:
+        if verbose:
+            print('Skipping non-media file {}'.format(path))
+        continue
+
+    file_date = get_date(path, is_image=image_mime)
+    dest_path = dest_photos_path if image_mime else dest_videos_path
+    date_path = dest_path / str(file_date.year)
+    file_date_path = date_path / '{}{}'.format(file_date.strftime('%Y-%m-%d %H-%M-%S'), path.suffix)
+
+    if file_date_path.exists():
+        source_shasum = shasum_path(path)
+
+        if source_shasum == shasum_path(file_date_path):
+            if verbose:
+                print('Media file {} already copied to {}'.format(path, file_date_path))
+            already_copied_count += 1
+            if remove_old_path(path):
+                removed_count += 1
+            continue
+
+        file_date_path = find_unique_path(file_date_path, source_shasum)
+
+        if not file_date_path:
+            if verbose:
+                print('Media file {} already copied to {}'.format(path, file_date_path))
+            already_copied_count += 1
+            if remove_old_path(path):
+                removed_count += 1
+            continue
+
+    date_path.mkdir(parents=True, exist_ok=True)
+    file_date_path.write_bytes(path.read_bytes())
+    copied_count += 1
+
+    if verbose:
+        print('Media file {} copied to {}'.format(path, file_date_path))
+
+    if shasum_path(path) == shasum_path(file_date_path):
+        if remove_old_path(path):
+            removed_count += 1
+    elif verbose:
+        if verbose:
+            print('Shasum of copied file {} and destination file {} do not match!'.format(path, file_date_path))
+        shasum_mismatch_count += 1
+
+if verbose:
+    print('\n---Move Media Complete---')
+    print('Copied {} files'.format(copied_count))
+    print('Skipped {} files that were already copied'.format(already_copied_count))
+    if shasum_mismatch_count > 0:
+        print('There were {} copied shasum mismatches'.format(shasum_mismatch_count))
+    if keep_old_path_days is not None:
+        print('Removed {} files older than {} days'.format(removed_count, keep_old_path_days))
