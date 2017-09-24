@@ -112,6 +112,8 @@ if verbose:
     print('Source: {}'.format(source_path))
     print('Photos Destination: {}'.format(dest_photos_path))
     print('Videos Destination: {}'.format(dest_videos_path))
+    if keep_old_path_days is not None:
+        print('Removing copied files older than {} days'.format(keep_old_path_days))
 
 for path in source_path.glob('**/*'):
     if not path.is_file():
